@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "berth"
+version = "1.0.0"
+description = "Berth Management Dashboard with ML predictions"
+requires-python = ">=3.8,<3.12"
+dependencies = [
+    "streamlit",
+    "numpy",
+    "pandas",
+    "joblib",
+    "plotly",
+    "lightgbm",
+    "scipy",
+    "scikit-learn"
+]
