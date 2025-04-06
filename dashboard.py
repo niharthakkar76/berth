@@ -14,32 +14,13 @@ import base64
 try:
     model_data = joblib.load('models/berth_model.joblib')
     model = model_data['model']  # Extract the actual model
-    feature_names = model_data.get('feature_names', ['TEUs', 'GRT', 'LOA', 'Draft', 'Berth'])
+    feature_names = model_data['feature_names']
     scalers = joblib.load('models/feature_scalers.joblib')
-    
-    # Validate model and scalers
-    if model is None:
-        st.error("Failed to load model")
-    if not isinstance(scalers, dict):
-        st.error("Invalid scaler format")
-        scalers = {}
-        
-    # Define feature types
-    numeric_features = ['TEUs', 'GRT', 'LOA', 'Draft']
-    categorical_features = ['Berth']
-    
-    # Validate scalers for numeric features
-    for feature in numeric_features:
-        if feature not in scalers:
-            st.warning(f"Missing scaler for numeric feature: {feature}")
-            
 except Exception as e:
     st.error(f"Error loading model: {str(e)}")
     model = None
-    feature_names = ['TEUs', 'GRT', 'LOA', 'Draft', 'Berth']
-    scalers = {}
-    numeric_features = ['TEUs', 'GRT', 'LOA', 'Draft']
-    categorical_features = ['Berth']
+    feature_names = None
+    scalers = None
 
 def normalize_features(df):
     """Normalize features using saved scalers"""
@@ -49,70 +30,51 @@ def normalize_features(df):
         
     scaled_df = df.copy()
     try:
-        for column in scaled_df.columns:
-            if column in scalers and column != 'Berth':  # Don't scale categorical features
-                scaler = scalers[column]
-                # Ensure numeric type for scaling
-                scaled_df[column] = pd.to_numeric(scaled_df[column], errors='coerce')
-                # Ensure feature names are preserved
-                scaled_values = scaler.transform(scaled_df[[column]])
-                scaled_df[column] = scaled_values
+        for column in df.columns:
+            if column in scalers:
+                scaled_df[column] = scalers[column].transform(df[column].values.reshape(-1, 1))
     except Exception as e:
         st.error(f"Error normalizing features: {str(e)}")
     return scaled_df
 
-def predict_with_confidence(features_df, n_iterations=100):
+def predict_with_confidence(features, n_iterations=100):
     """Generate predictions with confidence intervals using Monte Carlo simulation."""
+    # Check if model is available
     if model is None:
-        st.error("Model not loaded properly")
+        st.error("Model not loaded properly. Please check model files.")
         return 0, 0, 0
-        
+
+    # Ensure we have the correct feature names
+    if not isinstance(features, pd.DataFrame):
+        features = pd.DataFrame([features], columns=feature_names)
+    
     predictions = []
     noise_scale = 0.1  # Scale of noise to add
-    
-    # Ensure we have a DataFrame with proper feature names
-    if not isinstance(features_df, pd.DataFrame):
-        st.error("Features must be a pandas DataFrame")
-        return 0, 0, 0
-    
-    # Convert numeric columns to float
-    numeric_cols = ['TEUs', 'GRT', 'LOA', 'Draft']
-    for col in numeric_cols:
-        if col in features_df:
-            features_df[col] = pd.to_numeric(features_df[col], errors='coerce')
-        
+
     for _ in range(n_iterations):
         try:
-            # Add random noise to features while preserving feature names
-            noise = pd.DataFrame(
-                np.random.normal(0, noise_scale, size=features_df.shape),
-                columns=features_df.columns
-            )
-            # Only add noise to numeric columns
-            for col in features_df.columns:
-                if col not in numeric_cols:
-                    noise[col] = 0
-            noisy_features = features_df + noise
-            
-            # Ensure Berth column remains as string
-            noisy_features['Berth'] = features_df['Berth']
+            # Create noisy features while preserving feature names
+            noisy_features = features.copy()
+            noise = np.random.normal(0, noise_scale, size=features.shape)
+            for col in noisy_features.columns:
+                noisy_features[col] += noise[0][noisy_features.columns.get_loc(col)]
             
             # Make prediction
-            pred = model.predict(noisy_features)
-            predictions.append(float(pred[0]))  # Ensure prediction is float
+            pred = model.predict(noisy_features)[0]
+            predictions.append(pred)
         except Exception as e:
-            st.error(f"Prediction error: {str(e)}")
+            st.warning(f"Iteration failed, skipping: {str(e)}")
             continue
     
     if not predictions:
+        st.error("All prediction attempts failed")
         return 0, 0, 0
         
-    # Calculate statistics
-    predictions = np.array(predictions, dtype=float)
-    mean_pred = float(np.mean(predictions))
-    confidence_interval = float(1.96 * np.std(predictions))  # 95% confidence interval
+    predictions = np.array(predictions)
+    mean_pred = np.mean(predictions)
+    std_dev = np.std(predictions)
     
-    return mean_pred, mean_pred - confidence_interval, mean_pred + confidence_interval
+    return mean_pred, mean_pred - 1.96 * std_dev, mean_pred + 1.96 * std_dev
 
 # Update vessel category time ranges
 vessel_time_ranges = {
@@ -593,13 +555,36 @@ vessel_loa = st.sidebar.number_input("Length Overall (meters)", min_value=0.0, m
 vessel_draft = st.sidebar.number_input("Draft (meters)", min_value=0.0, max_value=20.0, value=12.5)
 berth_code = st.sidebar.selectbox("Berth", ["BERTH1", "BERTH2", "BERTH3", "BERTH4"])
 
-# Create feature vector with proper type handling
+# Create feature vector
 features = pd.DataFrame({
-    'TEUs': [float(vessel_teus)],
-    'GRT': [float(vessel_grt)],
-    'LOA': [float(vessel_loa)],
-    'Draft': [float(vessel_draft)],
-    'Berth': [str(berth_code)]
+    'LOA': [vessel_loa],
+    'No_of_Teus': [vessel_teus],
+    'GRT': [vessel_grt],
+    'port_waiting_time': [2.0],  # Default values
+    'ops_preparation_time': [1.5],
+    'total_port_time': [24.0],
+    'start_minutes_of_day': [360],  # 6 AM default
+    'arrival_hour': [6],
+    'arrival_day': [datetime.now().day],
+    'arrival_month': [datetime.now().month],
+    'arrival_year': [datetime.now().year],
+    'arrival_dayofweek': [datetime.now().weekday()],
+    'Berth_Code_encoded': [["BERTH1", "BERTH2", "BERTH3", "BERTH4"].index(berth_code)],
+    'size_category_encoded': [2],  # Will be determined by LOA
+    'teu_category_encoded': [2],   # Will be determined by TEUs
+    'grt_category_encoded': [2],   # Will be determined by GRT
+    'season_encoded': [datetime.now().month // 3],
+    'teu_per_meter': [vessel_teus/vessel_loa],
+    'grt_per_meter': [vessel_grt/vessel_loa],
+    'grt_per_teu': [vessel_grt/vessel_teus],
+    'total_prep_ratio': [0.75],
+    'waiting_ratio': [0.1],
+    'teu_density': [vessel_teus/(vessel_loa * vessel_grt)],
+    'volume_index': [np.cbrt(vessel_loa * vessel_grt * vessel_teus)],
+    'avg_prep_time_by_size': [1.5],
+    'avg_waiting_time_by_size': [2.0],
+    'is_night_arrival': [0],
+    'is_weekend': [0]
 })
 
 # Normalize features
