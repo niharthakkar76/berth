@@ -23,11 +23,23 @@ try:
     if not isinstance(scalers, dict):
         st.error("Invalid scaler format")
         scalers = {}
+        
+    # Define feature types
+    numeric_features = ['TEUs', 'GRT', 'LOA', 'Draft']
+    categorical_features = ['Berth']
+    
+    # Validate scalers for numeric features
+    for feature in numeric_features:
+        if feature not in scalers:
+            st.warning(f"Missing scaler for numeric feature: {feature}")
+            
 except Exception as e:
     st.error(f"Error loading model: {str(e)}")
     model = None
     feature_names = ['TEUs', 'GRT', 'LOA', 'Draft', 'Berth']
     scalers = {}
+    numeric_features = ['TEUs', 'GRT', 'LOA', 'Draft']
+    categorical_features = ['Berth']
 
 def normalize_features(df):
     """Normalize features using saved scalers"""
@@ -38,8 +50,10 @@ def normalize_features(df):
     scaled_df = df.copy()
     try:
         for column in scaled_df.columns:
-            if column in scalers:
+            if column in scalers and column != 'Berth':  # Don't scale categorical features
                 scaler = scalers[column]
+                # Ensure numeric type for scaling
+                scaled_df[column] = pd.to_numeric(scaled_df[column], errors='coerce')
                 # Ensure feature names are preserved
                 scaled_values = scaler.transform(scaled_df[[column]])
                 scaled_df[column] = scaled_values
@@ -60,6 +74,12 @@ def predict_with_confidence(features_df, n_iterations=100):
     if not isinstance(features_df, pd.DataFrame):
         st.error("Features must be a pandas DataFrame")
         return 0, 0, 0
+    
+    # Convert numeric columns to float
+    numeric_cols = ['TEUs', 'GRT', 'LOA', 'Draft']
+    for col in numeric_cols:
+        if col in features_df:
+            features_df[col] = pd.to_numeric(features_df[col], errors='coerce')
         
     for _ in range(n_iterations):
         try:
@@ -68,11 +88,18 @@ def predict_with_confidence(features_df, n_iterations=100):
                 np.random.normal(0, noise_scale, size=features_df.shape),
                 columns=features_df.columns
             )
+            # Only add noise to numeric columns
+            for col in features_df.columns:
+                if col not in numeric_cols:
+                    noise[col] = 0
             noisy_features = features_df + noise
+            
+            # Ensure Berth column remains as string
+            noisy_features['Berth'] = features_df['Berth']
             
             # Make prediction
             pred = model.predict(noisy_features)
-            predictions.append(pred[0])
+            predictions.append(float(pred[0]))  # Ensure prediction is float
         except Exception as e:
             st.error(f"Prediction error: {str(e)}")
             continue
@@ -81,9 +108,9 @@ def predict_with_confidence(features_df, n_iterations=100):
         return 0, 0, 0
         
     # Calculate statistics
-    predictions = np.array(predictions)
-    mean_pred = np.mean(predictions)
-    confidence_interval = 1.96 * np.std(predictions)  # 95% confidence interval
+    predictions = np.array(predictions, dtype=float)
+    mean_pred = float(np.mean(predictions))
+    confidence_interval = float(1.96 * np.std(predictions))  # 95% confidence interval
     
     return mean_pred, mean_pred - confidence_interval, mean_pred + confidence_interval
 
@@ -566,13 +593,13 @@ vessel_loa = st.sidebar.number_input("Length Overall (meters)", min_value=0.0, m
 vessel_draft = st.sidebar.number_input("Draft (meters)", min_value=0.0, max_value=20.0, value=12.5)
 berth_code = st.sidebar.selectbox("Berth", ["BERTH1", "BERTH2", "BERTH3", "BERTH4"])
 
-# Create feature vector
+# Create feature vector with proper type handling
 features = pd.DataFrame({
-    'TEUs': [vessel_teus],
-    'GRT': [vessel_grt],
-    'LOA': [vessel_loa],
-    'Draft': [vessel_draft],
-    'Berth': [berth_code]
+    'TEUs': [float(vessel_teus)],
+    'GRT': [float(vessel_grt)],
+    'LOA': [float(vessel_loa)],
+    'Draft': [float(vessel_draft)],
+    'Berth': [str(berth_code)]
 })
 
 # Normalize features
