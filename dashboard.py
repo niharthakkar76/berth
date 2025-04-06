@@ -27,12 +27,16 @@ def normalize_features(df):
     if scalers is None:
         st.error("Feature scalers not loaded properly")
         return df
+    
+    if not isinstance(df, pd.DataFrame):
+        df = pd.DataFrame([df], columns=feature_names)
         
     scaled_df = df.copy()
     try:
-        for column in df.columns:
+        for column in scaled_df.columns:
             if column in scalers:
-                scaled_df[column] = scalers[column].transform(df[column].values.reshape(-1, 1))
+                scaled_values = scalers[column].transform(scaled_df[[column]])
+                scaled_df[column] = scaled_values
     except Exception as e:
         st.error(f"Error normalizing features: {str(e)}")
     return scaled_df
@@ -44,26 +48,28 @@ def predict_with_confidence(features, n_iterations=100):
         st.error("Model not loaded properly. Please check model files.")
         return 0, 0, 0
 
-    # Ensure we have the correct feature names
+    # Ensure features is a DataFrame with correct column names
     if not isinstance(features, pd.DataFrame):
         features = pd.DataFrame([features], columns=feature_names)
     
     predictions = []
     noise_scale = 0.1  # Scale of noise to add
 
+    # Normalize features once before adding noise
+    features = normalize_features(features)
+
     for _ in range(n_iterations):
         try:
             # Create noisy features while preserving feature names
             noisy_features = features.copy()
-            noise = np.random.normal(0, noise_scale, size=features.shape)
             for col in noisy_features.columns:
-                noisy_features[col] += noise[0][noisy_features.columns.get_loc(col)]
+                noise = np.random.normal(0, noise_scale, size=len(noisy_features))
+                noisy_features[col] = noisy_features[col] + noise
             
             # Make prediction
             pred = model.predict(noisy_features)[0]
             predictions.append(pred)
         except Exception as e:
-            st.warning(f"Iteration failed, skipping: {str(e)}")
             continue
     
     if not predictions:
