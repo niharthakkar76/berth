@@ -10,35 +10,67 @@ from scipy import stats
 import math
 import base64
 
-# Load the trained model and scaler
-model_data = joblib.load('models/berth_model.joblib')
-model = model_data['model']  # Extract the actual model
-feature_names = model_data['feature_names']
-scalers = joblib.load('models/feature_scalers.joblib')
+# Load model and scalers
+try:
+    model_data = joblib.load('models/berth_model.joblib')
+    model = model_data['model']  # Extract the actual model
+    feature_names = model_data['feature_names']
+    scalers = joblib.load('models/feature_scalers.joblib')
+except Exception as e:
+    st.error(f"Error loading model: {str(e)}")
+    model = None
+    feature_names = None
+    scalers = None
 
 def normalize_features(df):
     """Normalize features using saved scalers"""
+    if scalers is None:
+        st.error("Feature scalers not loaded properly")
+        return df
+        
     scaled_df = df.copy()
-    for feature, scaler in scalers.items():
-        if feature in scaled_df:
-            scaled_df[feature] = scaler.transform(scaled_df[[feature]])
+    try:
+        for column in df.columns:
+            if column in scalers:
+                scaled_df[column] = scalers[column].transform(df[column].values.reshape(-1, 1))
+    except Exception as e:
+        st.error(f"Error normalizing features: {str(e)}")
     return scaled_df
 
 def predict_with_confidence(features, n_iterations=100):
-    """Make predictions with confidence intervals using bootstrap"""
+    """Generate predictions with confidence intervals using Monte Carlo simulation."""
     predictions = []
+    noise_scale = 0.1  # Scale of noise to add
+    
+    # Convert features to numpy array if it's a DataFrame
+    if isinstance(features, pd.DataFrame):
+        features_array = features.values
+    else:
+        features_array = features
+        
     for _ in range(n_iterations):
-        # Add random noise to features to simulate uncertainty
-        noisy_features = features * (1 + np.random.normal(0, 0.05, size=features.shape))
-        pred = model.predict(noisy_features)
-        predictions.append(pred)
+        # Add random noise to features
+        noise = np.random.normal(0, noise_scale, size=features_array.shape)
+        noisy_features = features_array + noise
+        
+        # Ensure features are in correct format for model
+        if isinstance(features, pd.DataFrame):
+            noisy_features = pd.DataFrame(noisy_features, columns=features.columns)
+        
+        # Get prediction
+        try:
+            pred = model.predict(noisy_features)
+            predictions.append(pred[0])  # Take first prediction if batch
+        except Exception as e:
+            st.error(f"Prediction error: {str(e)}")
+            return 0, 0, 0  # Return zeros if prediction fails
     
+    # Calculate statistics
     predictions = np.array(predictions)
-    mean_pred = np.mean(predictions, axis=0)
-    lower_bound = np.percentile(predictions, 5, axis=0)
-    upper_bound = np.percentile(predictions, 95, axis=0)
+    mean_pred = np.mean(predictions)
+    confidence_interval = 1.96 * np.std(predictions)  # 95% confidence interval
     
-    return mean_pred, lower_bound, upper_bound
+    return mean_pred, mean_pred - confidence_interval, mean_pred + confidence_interval
 
 # Update vessel category time ranges
 vessel_time_ranges = {
